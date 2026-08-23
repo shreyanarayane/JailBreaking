@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
+import { validatePrn } from "@/lib/prn";
 
 export async function POST(req: NextRequest) {
   const { class_code, prn_number, name } = await req.json();
@@ -9,6 +10,11 @@ export async function POST(req: NextRequest) {
       { error: "class_code, prn_number and name are all required." },
       { status: 400 }
     );
+  }
+
+  const prnCheck = validatePrn(String(prn_number));
+  if (!prnCheck.valid) {
+    return NextResponse.json({ error: prnCheck.error }, { status: 400 });
   }
 
   const supabase = getSupabaseAdmin();
@@ -38,7 +44,7 @@ export async function POST(req: NextRequest) {
     .upsert(
       {
         class_id: klass.id,
-        prn_number: prn_number.trim(),
+        prn_number: prnCheck.prn,
         name: name.trim(),
       },
       { onConflict: "class_id,prn_number", ignoreDuplicates: false }
