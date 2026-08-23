@@ -1,23 +1,14 @@
-import {
-  GenerateContentResult,
-  GenerationConfig,
-  GoogleGenerativeAI,
-} from "@google/generative-ai";
+import { GenerateContentResult, GoogleGenerativeAI } from "@google/generative-ai";
 
 export class GeminiKeyInvalidError extends Error {}
 
-// The 2.5 models reason before answering and charge those hidden thinking
-// tokens against maxOutputTokens, which can consume the whole budget and
-// return a candidate with no text at all. `thinkingConfig` is not in this
-// SDK version's types, but generationConfig is serialized straight into the
-// v1beta request body, so the field reaches the API.
-type GenerationConfigWithThinking = GenerationConfig & {
-  thinkingConfig?: { thinkingBudget: number };
-};
+// Current models reason before answering and charge those hidden thinking
+// tokens against maxOutputTokens, so a small budget gets spent entirely on
+// reasoning and the candidate comes back empty or cut off mid-word. The budget
+// has to cover reasoning plus the answer.
+const MAX_OUTPUT_TOKENS = 4096;
 
-const NO_THINKING: GenerationConfigWithThinking = {
-  thinkingConfig: { thinkingBudget: 0 },
-};
+const MAX_MODEL_ATTEMPTS = 4;
 
 /**
  * `result.response.text()` throws when a candidate was cut off before
@@ -47,58 +38,59 @@ export interface KeyValidationResult {
   error?: string;
 }
 
-// Fallback list if dynamic listing is restricted, cheapest-and-fastest first.
-// Only model names that actually exist on the free tier.
+// Tried in order. The "lite" models answer with little or no hidden reasoning,
+// so they spend the token budget on text the student can read; heavier flash
+// models follow for keys that do not have the lite ones.
 const FALLBACK_MODELS = [
-  "gemini-2.0-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-flash-lite-latest",
+  "gemini-3.1-flash-lite",
   "gemini-2.5-flash-lite",
-  "gemini-2.5-flash",
-  "gemini-1.5-flash",
+  "gemini-3.5-flash",
+  "gemini-flash-latest",
 ];
 
-// Models that burn output budget on hidden reasoning; deprioritized so a
-// student's turn isn't spent on thinking tokens instead of an answer.
-const THINKING_MODEL = /2\.5-(flash|pro)$/;
+// Models that accept generateContent but cannot answer a chat turn with plain
+// text (speech, images, music, robotics, research agents).
+const NON_CHAT_MODEL =
+  /tts|image|audio|embedding|robotics|computer-use|lyria|nano-banana|deep-research|antigravity|omni|gemma|-thinking/;
 
 /**
- * Dynamically finds the best available model for this student's API key
- * that supports generateContent.
+ * Orders the models this key can actually use, best first. Availability differs
+ * per key (newer keys 404 on older model names), so a fixed list alone wastes a
+ * student's turn walking through models that do not exist for them.
  */
-async function discoverWorkingModel(apiKey: string): Promise<string> {
+async function resolveModelCandidates(apiKey: string): Promise<string[]> {
+  let available: string[] = [];
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=200`
     );
     if (res.ok) {
       const data = await res.json();
       const models: Array<{ name: string; supportedGenerationMethods?: string[] }> =
         data.models || [];
-
-      const usable = models.filter(
-        (m) =>
-          m.supportedGenerationMethods?.includes("generateContent") &&
-          !m.name.includes("-thinking")
-      );
-
-      // Prefer a flash model that answers without a hidden reasoning pass.
-      const flashModel =
-        usable.find(
-          (m) => m.name.includes("flash") && !THINKING_MODEL.test(m.name)
-        ) ?? usable.find((m) => m.name.includes("flash"));
-      if (flashModel) {
-        return flashModel.name.replace("models/", "");
-      }
-
-      const anyModel = usable[0];
-      if (anyModel) {
-        return anyModel.name.replace("models/", "");
-      }
+      available = models
+        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+        .map((m) => m.name.replace("models/", ""))
+        .filter((name) => !NON_CHAT_MODEL.test(name));
     }
   } catch (err) {
-    console.warn("[discoverWorkingModel] Could not list models, using fallback list:", err);
+    console.warn("[resolveModelCandidates] Could not list models, using fallback list:", err);
   }
 
-  return FALLBACK_MODELS[0];
+  if (available.length === 0) {
+    return FALLBACK_MODELS.slice(0, MAX_MODEL_ATTEMPTS);
+  }
+
+  const preferred = FALLBACK_MODELS.filter((m) => available.includes(m));
+  const otherFlash = available.filter(
+    (m) => !preferred.includes(m) && m.includes("flash")
+  );
+  // Capped: every failed attempt is a sequential round trip inside one
+  // serverless invocation, so a long list risks a function timeout.
+  const candidates = [...preferred, ...otherFlash].slice(0, MAX_MODEL_ATTEMPTS);
+  return candidates.length > 0 ? candidates : FALLBACK_MODELS;
 }
 
 /**
@@ -111,13 +103,8 @@ export async function validateGeminiKey(rawApiKey: string): Promise<KeyValidatio
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  
-  // 1. Try to dynamically discover an active model for this key
-  const preferredModel = await discoverWorkingModel(apiKey);
-  const modelsToTry = [
-    preferredModel,
-    ...FALLBACK_MODELS.filter((m) => m !== preferredModel),
-  ];
+
+  const modelsToTry = await resolveModelCandidates(apiKey);
 
   let lastError = "";
 
@@ -126,7 +113,7 @@ export async function validateGeminiKey(rawApiKey: string): Promise<KeyValidatio
       const model = genAI.getGenerativeModel({ model: modelName });
       const result = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: "ping" }] }],
-        generationConfig: { ...NO_THINKING, maxOutputTokens: 5 },
+        generationConfig: { maxOutputTokens: 5 },
       });
 
       if (result.response) {
@@ -210,13 +197,10 @@ export async function callClassBot(
   const apiKey = rawApiKey.trim().replace(/^["']|["']$/g, "");
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  const preferredModel = await discoverWorkingModel(apiKey);
-  const modelsToTry = [
-    preferredModel,
-    ...FALLBACK_MODELS.filter((m) => m !== preferredModel),
-  ];
+  const modelsToTry = await resolveModelCandidates(apiKey);
 
   const systemInstruction = buildClassBotSystemPrompt(secretCode, craftScore);
+  let lastError = "";
 
   for (const modelName of modelsToTry) {
     try {
@@ -226,19 +210,23 @@ export async function callClassBot(
       });
       const result = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: studentPrompt }] }],
-        generationConfig: { ...NO_THINKING, maxOutputTokens: 1024 },
+        generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
       });
       const text = extractText(result, modelName);
       if (text) {
         return text;
       }
     } catch (err: any) {
-      if (err?.status === 401 || err?.status === 400 || err?.message?.includes("API_KEY_INVALID")) {
+      if (err?.status === 401 || err?.message?.includes("API_KEY_INVALID")) {
         throw new GeminiKeyInvalidError("Stored Gemini API key was rejected.");
       }
-      console.warn(`[callClassBot] ${modelName} failed, trying next available model...`, err?.message);
+      lastError = err?.message || String(err);
+      console.warn(`[callClassBot] ${modelName} failed, trying next available model...`, lastError);
     }
   }
 
+  if (/quota|RESOURCE_EXHAUSTED|429/.test(lastError)) {
+    return "(Your Gemini key has hit its quota for now, so ClassBot can't reply — your CRAFT analysis is below.)";
+  }
   return "(ClassBot is momentarily busy — but here's your CRAFT analysis below.)";
 }
