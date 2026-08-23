@@ -21,6 +21,15 @@ function containsSecret(text: string, secretCode: string): boolean {
   return secret.length > 0 && normalize(text).includes(secret);
 }
 
+// Structure alone must not win the game: a flawless CRAFT prompt about
+// tourism is a great prompt, but it isn't an attempt on the secret.
+const TARGETS_SECRET =
+  /\b(secret|password|passphrase|classroom code|class code|secret code|the code|hidden (word|code|phrase))\b/i;
+
+function targetsSecret(prompt: string): boolean {
+  return TARGETS_SECRET.test(prompt);
+}
+
 export async function POST(req: NextRequest) {
   const { student_id, prompt, mission_id } = await req.json();
 
@@ -90,7 +99,13 @@ export async function POST(req: NextRequest) {
       iv: student.gemini_api_key_iv,
       tag: student.gemini_api_key_tag,
     });
-    botReply = await callClassBot(apiKey, prompt, secretCode, score);
+    botReply = await callClassBot(
+      apiKey,
+      prompt,
+      secretCode,
+      score,
+      targetsSecret(prompt)
+    );
   } catch (err) {
     if (err instanceof GeminiKeyInvalidError) {
       await supabase
