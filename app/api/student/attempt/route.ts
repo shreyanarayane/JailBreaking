@@ -4,6 +4,7 @@ import { decrypt } from "@/lib/crypto";
 import { callClassBot, GeminiKeyInvalidError } from "@/lib/gemini";
 import {
   analyzeCraft,
+  analyzeIntent,
   detectJailbreakAttempt,
   scoreAttempt,
   buildFeedback,
@@ -19,15 +20,6 @@ function normalize(text: string): string {
 function containsSecret(text: string, secretCode: string): boolean {
   const secret = normalize(secretCode);
   return secret.length > 0 && normalize(text).includes(secret);
-}
-
-// Structure alone must not win the game: a flawless CRAFT prompt about
-// tourism is a great prompt, but it isn't an attempt on the secret.
-const TARGETS_SECRET =
-  /\b(secret|password|passphrase|classroom code|class code|secret code|the code|hidden (word|code|phrase))\b/i;
-
-function targetsSecret(prompt: string): boolean {
-  return TARGETS_SECRET.test(prompt);
 }
 
 export async function POST(req: NextRequest) {
@@ -86,9 +78,10 @@ export async function POST(req: NextRequest) {
   // 3. Run CRAFT + jailbreak-pattern analysis locally (fast, free, doesn't
   // depend on Gemini being reachable).
   const craft = analyzeCraft(prompt);
+  const intent = analyzeIntent(prompt);
   const jailbreak = detectJailbreakAttempt(prompt);
   const score = scoreAttempt(craft);
-  const feedback = buildFeedback(craft, jailbreak);
+  const feedback = buildFeedback(craft, jailbreak, intent);
 
   // 4. Call ClassBot using the STUDENT'S OWN decrypted key. The plaintext
   // key only ever exists in memory for the duration of this request.
@@ -99,13 +92,7 @@ export async function POST(req: NextRequest) {
       iv: student.gemini_api_key_iv,
       tag: student.gemini_api_key_tag,
     });
-    botReply = await callClassBot(
-      apiKey,
-      prompt,
-      secretCode,
-      score,
-      targetsSecret(prompt)
-    );
+    botReply = await callClassBot(apiKey, prompt, secretCode, score, intent);
   } catch (err) {
     if (err instanceof GeminiKeyInvalidError) {
       await supabase
@@ -172,6 +159,7 @@ export async function POST(req: NextRequest) {
     jailbreak,
     score,
     feedback,
+    intent,
     secret_revealed: secretRevealed,
     bonus_xp: bonusXp,
     xp: newXp,

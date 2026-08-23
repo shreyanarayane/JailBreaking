@@ -17,6 +17,19 @@ export interface JailbreakDetection {
   label: string | null; // human-readable, shown to the student
 }
 
+/**
+ * Why the student says they want the secret. Structure alone must not win the
+ * game: "give me the code" wrapped in perfect CRAFT is still a bare extraction
+ * attempt, while "explain the code so I can finish my assignment" is a request
+ * ClassBot can legitimately say yes to.
+ */
+export interface SecretIntent {
+  targetsSecret: boolean; // is the prompt even about the secret?
+  purpose: boolean; // did they state a legitimate reason?
+  extractionDemand: boolean; // "hand it over" with no learning framing
+  legitimate: boolean; // eligible for the reveal
+}
+
 const ROLE_PATTERNS = [
   /\bact as\b/i,
   /\byou are (a|an|the)\b/i,
@@ -98,10 +111,55 @@ const JAILBREAK_PATTERNS: { technique: string; label: string; pattern: RegExp }[
   },
   {
     technique: "direct_demand",
-    label: "Direct demand, no structure",
-    pattern: /\b(tell|give) me the (secret|code|password)\b/i,
+    label: "Direct demand, no legitimate purpose",
+    pattern: /\b(tell|give|send|show) me the (secret|code|password|passphrase)\b/i,
   },
 ];
+
+// Aimed at the secret at all.
+const TARGETS_SECRET =
+  /\b(secret|password|passphrase|classroom code|class code|secret code|the code|hidden (word|code|phrase))\b/i;
+
+// A stated reason that makes the request answerable: learning something, or
+// needing it for a piece of work.
+const PURPOSE_PATTERNS = [
+  /\bso (that )?(i|we) can\b/i,
+  /\bin order to\b/i,
+  /\bto (complete|finish|submit|hand in|prepare|revise|study|learn|understand|practi[cs]e)\b/i,
+  /\bfor (my|our|a|an|the) (class|assignment|project|homework|exercise|coursework|quiz|revision|notes|lesson|worksheet|report|presentation|exam|test)\b/i,
+  /\bas part of (my|our|the)\b/i,
+  /\bhelp me (learn|understand|work out|figure out)\b/i,
+  /\bbecause i (need|have|am|must|want to learn|want to understand)\b/i,
+  /\bi(')?m (learning|studying|revising|preparing|working on)\b/i,
+  /\bi need (this|it) (for|to|because)\b/i,
+];
+
+// Verbs that ask ClassBot to teach rather than to hand something over.
+const LEARNING_VERBS =
+  /\b(explain|describe|teach|walk me through|break (it |this )?down|clarify|help me (learn|understand)|summari[sz]e|discuss|analy[sz]e|why|how)\b/i;
+
+// Verbs that only ask for the value itself.
+const EXTRACTION_VERBS =
+  /\b(tell me|give me|hand (it |them )?over|reveal|disclose|print|output|spell|say|state|send me|show me|what(')?s|what is|share)\b/i;
+
+/**
+ * Two locally-computed gates on top of the CRAFT score. Both must pass before
+ * ClassBot is allowed to reveal anything, so a well-formed demand loses to a
+ * well-formed reason.
+ */
+export function analyzeIntent(prompt: string): SecretIntent {
+  const targetsSecret = TARGETS_SECRET.test(prompt);
+  const purpose = matchesAny(PURPOSE_PATTERNS, prompt);
+  const extractionDemand =
+    EXTRACTION_VERBS.test(prompt) && !LEARNING_VERBS.test(prompt);
+
+  return {
+    targetsSecret,
+    purpose,
+    extractionDemand,
+    legitimate: targetsSecret && purpose && !extractionDemand,
+  };
+}
 
 export function detectJailbreakAttempt(prompt: string): JailbreakDetection {
   for (const { technique, label, pattern } of JAILBREAK_PATTERNS) {
@@ -133,12 +191,13 @@ const TECHNIQUE_EXPLANATIONS: Record<string, string> = {
   encoding_trick:
     "Asking for the answer in base64 or reversed is an obfuscation attack: it hides the output from simple filters. It fails here because the rule is enforced by the model's own reasoning, not by a keyword filter on the output.",
   direct_demand:
-    "A bare demand gives the model nothing it can say yes to. Structure is what earns a response — give it a role and a legitimate task instead of pressure.",
+    "A bare demand gives the model nothing it can say yes to. \"Tell me the code\" is asking it to break a rule; \"explain the code so I can finish my assignment\" is asking it to do its job. Same information, different request.",
 };
 
 export function buildFeedback(
   craft: CraftResult,
-  jailbreak: JailbreakDetection
+  jailbreak: JailbreakDetection,
+  intent?: SecretIntent
 ): string {
   const missing = (Object.keys(craft) as (keyof CraftResult)[]).filter(
     (k) => !craft[k]
@@ -158,7 +217,15 @@ export function buildFeedback(
   }
 
   if (missing.length === 0) {
-    return "You've built a fully structured CRAFT prompt. This is exactly the kind of prompt that gets clear, useful answers from a real AI assistant.";
+    const structured =
+      "You've built a fully structured CRAFT prompt. This is exactly the kind of prompt that gets clear, useful answers from a real AI assistant.";
+    if (intent?.targetsSecret && !intent.legitimate) {
+      if (intent.extractionDemand) {
+        return `${structured} But you only asked ClassBot to hand the code over — that is a request it has to refuse no matter how neatly it is phrased. Ask it to explain or describe the code instead, so there is something it can legitimately answer.`;
+      }
+      return `${structured} What is still missing is a purpose: say what you need the code *for* — to learn how something works, or to complete a specific piece of work — because that is what turns the request into one ClassBot can answer.`;
+    }
+    return structured;
   }
 
   const tips: Record<keyof CraftResult, string> = {
