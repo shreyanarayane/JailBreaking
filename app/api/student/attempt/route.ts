@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
     containsSecret(prompt, secretCode) || containsSecret(botReply, secretCode);
   const bonusXp = secretRevealed ? SECRET_BONUS_XP : 0;
 
-  const { error: insertErr } = await supabase.from("attempts").insert({
+  const attemptRow = {
     student_id,
     mission_id: mission_id ?? null,
     prompt,
@@ -127,9 +127,21 @@ export async function POST(req: NextRequest) {
     jailbreak_technique: jailbreak.technique,
     score,
     feedback,
-    secret_revealed: secretRevealed,
     gemini_response_snippet: botReply.slice(0, 1500),
-  });
+  };
+
+  let { error: insertErr } = await supabase
+    .from("attempts")
+    .insert({ ...attemptRow, secret_revealed: secretRevealed });
+
+  // Deployments created before secret_revealed existed have no such column;
+  // record the attempt without it rather than losing it entirely.
+  if (insertErr?.message?.includes("secret_revealed")) {
+    console.warn(
+      "attempts.secret_revealed is missing — run the migration in supabase/schema.sql"
+    );
+    ({ error: insertErr } = await supabase.from("attempts").insert(attemptRow));
+  }
 
   if (insertErr) {
     console.error("Failed to store attempt:", insertErr.message);
