@@ -18,6 +18,8 @@ interface Turn {
   jailbreak: { detected: boolean; label: string | null };
   score: number;
   feedback: string;
+  secretRevealed: boolean;
+  bonusXp: number;
 }
 
 const CRAFT_ROWS: { key: keyof Craft; label: string }[] = [
@@ -83,6 +85,8 @@ export default function ChatPage() {
           jailbreak: data.jailbreak,
           score: data.score,
           feedback: data.feedback,
+          secretRevealed: Boolean(data.secret_revealed),
+          bonusXp: data.bonus_xp ?? 0,
         },
       ]);
       setXp(data.xp);
@@ -139,9 +143,14 @@ export default function ChatPage() {
               <div className="self-end bg-lab-signal/10 border border-lab-signal/30 rounded-xl rounded-br-sm px-4 py-2.5 max-w-[85%] text-sm">
                 {t.prompt}
               </div>
-              <div className="self-start bg-lab-panel border border-lab-line rounded-xl rounded-bl-sm px-4 py-2.5 max-w-[85%] text-sm">
+              <div className="self-start bg-lab-panel border border-lab-line rounded-xl rounded-bl-sm px-4 py-2.5 max-w-[85%] text-sm whitespace-pre-wrap">
                 {t.botReply}
               </div>
+              {t.secretRevealed && (
+                <div className="self-start bg-lab-signal/10 border border-lab-signal/40 rounded-xl px-4 py-2.5 max-w-[85%] text-sm text-lab-signal">
+                  🔓 Secret cracked! +{t.bonusXp} bonus XP
+                </div>
+              )}
             </div>
           ))}
           <div ref={bottomRef} />

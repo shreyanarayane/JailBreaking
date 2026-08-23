@@ -68,10 +68,14 @@ create table attempts (
   jailbreak_technique   text,                  -- e.g. 'instruction_override', null if none detected
   score                 int not null default 0,
   feedback              text,
+  secret_revealed       boolean not null default false,
   gemini_response_snippet text,                -- truncated, for teacher review only
   created_at            timestamptz not null default now()
 );
 create index idx_attempts_student_id on attempts(student_id, created_at desc);
+
+-- Existing deployments: add the win flag without recreating the table.
+-- alter table attempts add column if not exists secret_revealed boolean not null default false;
 
 -- seed the five CRAFT missions from the lesson plan
 insert into missions (title, description, difficulty, required_craft_components, xp, sort_order) values

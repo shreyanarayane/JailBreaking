@@ -10,6 +10,17 @@ import {
 } from "@/lib/craft-detector";
 import { checkAttemptRateLimit } from "@/lib/ratelimit";
 
+const SECRET_BONUS_XP = 50;
+
+function normalize(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function containsSecret(text: string, secretCode: string): boolean {
+  const secret = normalize(secretCode);
+  return secret.length > 0 && normalize(text).includes(secret);
+}
+
 export async function POST(req: NextRequest) {
   const { student_id, prompt, mission_id } = await req.json();
 
@@ -79,7 +90,7 @@ export async function POST(req: NextRequest) {
       iv: student.gemini_api_key_iv,
       tag: student.gemini_api_key_tag,
     });
-    botReply = await callClassBot(apiKey, prompt, secretCode);
+    botReply = await callClassBot(apiKey, prompt, secretCode, score);
   } catch (err) {
     if (err instanceof GeminiKeyInvalidError) {
       await supabase
@@ -97,8 +108,13 @@ export async function POST(req: NextRequest) {
     botReply = "(ClassBot couldn't respond right now — here's your CRAFT analysis below.)";
   }
 
-  // 5. Store the attempt (truncate the bot reply — we only keep a snippet
-  // for teacher review, not the full transcript).
+  // 5. The student wins by getting the secret out of ClassBot — either by
+  // saying it themselves (they deduced it from clues) or by driving ClassBot
+  // into revealing it.
+  const secretRevealed =
+    containsSecret(prompt, secretCode) || containsSecret(botReply, secretCode);
+  const bonusXp = secretRevealed ? SECRET_BONUS_XP : 0;
+
   const { error: insertErr } = await supabase.from("attempts").insert({
     student_id,
     mission_id: mission_id ?? null,
@@ -111,6 +127,7 @@ export async function POST(req: NextRequest) {
     jailbreak_technique: jailbreak.technique,
     score,
     feedback,
+    secret_revealed: secretRevealed,
     gemini_response_snippet: botReply.slice(0, 1500),
   });
 
@@ -119,7 +136,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 6. Award XP and return everything the UI needs.
-  const newXp = student.xp + score;
+  const newXp = student.xp + score + bonusXp;
   await supabase.from("students").update({ xp: newXp }).eq("id", student_id);
 
   return NextResponse.json({
@@ -128,6 +145,8 @@ export async function POST(req: NextRequest) {
     jailbreak,
     score,
     feedback,
+    secret_revealed: secretRevealed,
+    bonus_xp: bonusXp,
     xp: newXp,
   });
 }
