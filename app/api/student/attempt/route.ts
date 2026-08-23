@@ -4,11 +4,23 @@ import { decrypt } from "@/lib/crypto";
 import { callClassBot, GeminiKeyInvalidError } from "@/lib/gemini";
 import {
   analyzeCraft,
+  analyzeIntent,
   detectJailbreakAttempt,
   scoreAttempt,
   buildFeedback,
 } from "@/lib/craft-detector";
 import { checkAttemptRateLimit } from "@/lib/ratelimit";
+
+const SECRET_BONUS_XP = 50;
+
+function normalize(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function containsSecret(text: string, secretCode: string): boolean {
+  const secret = normalize(secretCode);
+  return secret.length > 0 && normalize(text).includes(secret);
+}
 
 export async function POST(req: NextRequest) {
   const { student_id, prompt, mission_id } = await req.json();
@@ -66,9 +78,10 @@ export async function POST(req: NextRequest) {
   // 3. Run CRAFT + jailbreak-pattern analysis locally (fast, free, doesn't
   // depend on Gemini being reachable).
   const craft = analyzeCraft(prompt);
+  const intent = analyzeIntent(prompt);
   const jailbreak = detectJailbreakAttempt(prompt);
   const score = scoreAttempt(craft);
-  const feedback = buildFeedback(craft, jailbreak);
+  const feedback = buildFeedback(craft, jailbreak, intent);
 
   // 4. Call ClassBot using the STUDENT'S OWN decrypted key. The plaintext
   // key only ever exists in memory for the duration of this request.
@@ -79,7 +92,7 @@ export async function POST(req: NextRequest) {
       iv: student.gemini_api_key_iv,
       tag: student.gemini_api_key_tag,
     });
-    botReply = await callClassBot(apiKey, prompt, secretCode);
+    botReply = await callClassBot(apiKey, prompt, secretCode, score, intent);
   } catch (err) {
     if (err instanceof GeminiKeyInvalidError) {
       await supabase
@@ -97,9 +110,14 @@ export async function POST(req: NextRequest) {
     botReply = "(ClassBot couldn't respond right now — here's your CRAFT analysis below.)";
   }
 
-  // 5. Store the attempt (truncate the bot reply — we only keep a snippet
-  // for teacher review, not the full transcript).
-  const { error: insertErr } = await supabase.from("attempts").insert({
+  // 5. The student wins by getting the secret out of ClassBot — either by
+  // saying it themselves (they deduced it from clues) or by driving ClassBot
+  // into revealing it.
+  const secretRevealed =
+    containsSecret(prompt, secretCode) || containsSecret(botReply, secretCode);
+  const bonusXp = secretRevealed ? SECRET_BONUS_XP : 0;
+
+  const attemptRow = {
     student_id,
     mission_id: mission_id ?? null,
     prompt,
@@ -111,15 +129,28 @@ export async function POST(req: NextRequest) {
     jailbreak_technique: jailbreak.technique,
     score,
     feedback,
-    gemini_response_snippet: botReply.slice(0, 300),
-  });
+    gemini_response_snippet: botReply.slice(0, 1500),
+  };
+
+  let { error: insertErr } = await supabase
+    .from("attempts")
+    .insert({ ...attemptRow, secret_revealed: secretRevealed });
+
+  // Deployments created before secret_revealed existed have no such column;
+  // record the attempt without it rather than losing it entirely.
+  if (insertErr?.message?.includes("secret_revealed")) {
+    console.warn(
+      "attempts.secret_revealed is missing — run the migration in supabase/schema.sql"
+    );
+    ({ error: insertErr } = await supabase.from("attempts").insert(attemptRow));
+  }
 
   if (insertErr) {
     console.error("Failed to store attempt:", insertErr.message);
   }
 
   // 6. Award XP and return everything the UI needs.
-  const newXp = student.xp + score;
+  const newXp = student.xp + score + bonusXp;
   await supabase.from("students").update({ xp: newXp }).eq("id", student_id);
 
   return NextResponse.json({
@@ -128,6 +159,12 @@ export async function POST(req: NextRequest) {
     jailbreak,
     score,
     feedback,
+    intent,
+    secret_revealed: secretRevealed,
+    // Only ever sent once the student has already earned it, so the celebration
+    // screen can display it without the client holding the answer beforehand.
+    revealed_secret: secretRevealed ? secretCode : null,
+    bonus_xp: bonusXp,
     xp: newXp,
   });
 }

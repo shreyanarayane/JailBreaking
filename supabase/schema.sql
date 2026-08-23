@@ -17,7 +17,7 @@ create table classes (
   id            uuid primary key default gen_random_uuid(),
   teacher_id    uuid not null references teachers(id) on delete cascade,
   class_name    text not null,
-  class_code    text unique not null,          -- e.g. "7XK4P", shown to students to join
+  class_code    text unique not null,          -- e.g. "SEC1-A1", shown to students to join
   secret_code   text not null default 'CRAFT-2026',
   max_attempts  int not null default 10,
   active        boolean not null default true,
@@ -68,10 +68,14 @@ create table attempts (
   jailbreak_technique   text,                  -- e.g. 'instruction_override', null if none detected
   score                 int not null default 0,
   feedback              text,
+  secret_revealed       boolean not null default false,
   gemini_response_snippet text,                -- truncated, for teacher review only
   created_at            timestamptz not null default now()
 );
 create index idx_attempts_student_id on attempts(student_id, created_at desc);
+
+-- Existing deployments: add the win flag without recreating the table.
+-- alter table attempts add column if not exists secret_revealed boolean not null default false;
 
 -- seed the five CRAFT missions from the lesson plan
 insert into missions (title, description, difficulty, required_craft_components, xp, sort_order) values

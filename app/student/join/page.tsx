@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { PRN_MAX, PRN_MIN, validatePrn } from "@/lib/prn";
 
 export default function JoinPage() {
   const router = useRouter();
@@ -14,12 +15,23 @@ export default function JoinPage() {
   async function handleJoin(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    const prnCheck = validatePrn(prn);
+    if (!prnCheck.valid) {
+      setError(prnCheck.error!);
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await fetch("/api/student/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ class_code: classCode, prn_number: prn, name }),
+        body: JSON.stringify({
+          class_code: classCode,
+          prn_number: prnCheck.prn,
+          name,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -54,7 +66,7 @@ export default function JoinPage() {
         <input
           value={classCode}
           onChange={(e) => setClassCode(e.target.value.toUpperCase())}
-          placeholder="7XK4P"
+          placeholder="SEC1-A1"
           className="mono w-full bg-lab-bg border border-lab-line rounded-lg px-3 py-2 mb-4 tracking-widest uppercase focus:outline-none focus:border-lab-signal"
           maxLength={8}
           required
@@ -65,11 +77,16 @@ export default function JoinPage() {
         </label>
         <input
           value={prn}
-          onChange={(e) => setPrn(e.target.value)}
-          placeholder="e.g. 24CS1042"
-          className="mono w-full bg-lab-bg border border-lab-line rounded-lg px-3 py-2 mb-4 focus:outline-none focus:border-lab-signal"
+          onChange={(e) => setPrn(e.target.value.replace(/\D/g, ""))}
+          placeholder={String(PRN_MIN)}
+          inputMode="numeric"
+          maxLength={String(PRN_MAX).length}
+          className="mono w-full bg-lab-bg border border-lab-line rounded-lg px-3 py-2 focus:outline-none focus:border-lab-signal"
           required
         />
+        <p className="text-lab-dim text-xs mt-1 mb-4">
+          Must be between {PRN_MIN} and {PRN_MAX}.
+        </p>
 
         <label className="block text-xs uppercase tracking-wide text-lab-dim mb-1">
           Your name

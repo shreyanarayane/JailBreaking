@@ -22,7 +22,7 @@ free tiers.
 4. Insert a class per section you teach:
    ```sql
    insert into classes (teacher_id, class_name, class_code, secret_code)
-   values ('<teacher-id>', 'Class 10-A', '7XK4P', 'CRAFT-2026');
+   values ('<teacher-id>', 'Section 1', 'SEC1-A1', 'CRAFT-2026');
    ```
    Repeat with a unique `class_code` for each of your 6 classes.
 5. Copy your **Project URL** and **service_role key** (Settings → API) —
