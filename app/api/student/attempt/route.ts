@@ -111,7 +111,7 @@ export async function POST(req: NextRequest) {
     jailbreak_technique: jailbreak.technique,
     score,
     feedback,
-    gemini_response_snippet: botReply.slice(0, 300),
+    gemini_response_snippet: botReply.slice(0, 1500),
   });
 
   if (insertErr) {
