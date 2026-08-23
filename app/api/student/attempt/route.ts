@@ -161,6 +161,9 @@ export async function POST(req: NextRequest) {
     feedback,
     intent,
     secret_revealed: secretRevealed,
+    // Only ever sent once the student has already earned it, so the celebration
+    // screen can display it without the client holding the answer beforehand.
+    revealed_secret: secretRevealed ? secretCode : null,
     bonus_xp: bonusXp,
     xp: newXp,
   });

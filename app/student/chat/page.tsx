@@ -22,6 +22,11 @@ interface Turn {
   bonusXp: number;
 }
 
+interface Win {
+  secret: string | null;
+  bonusXp: number;
+}
+
 const CRAFT_ROWS: { key: keyof Craft; label: string }[] = [
   { key: "role", label: "Role" },
   { key: "context", label: "Context" },
@@ -39,6 +44,7 @@ export default function ChatPage() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [win, setWin] = useState<Win | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -91,6 +97,12 @@ export default function ChatPage() {
       ]);
       setXp(data.xp);
       sessionStorage.setItem("pjl_xp", String(data.xp));
+      if (data.secret_revealed) {
+        setWin({
+          secret: data.revealed_secret ?? null,
+          bonusXp: data.bonus_xp ?? 0,
+        });
+      }
     } catch {
       setError("Network error — please try again.");
       setPrompt(sentPrompt);
@@ -103,6 +115,42 @@ export default function ChatPage() {
 
   return (
     <main className="min-h-screen flex flex-col">
+      {win && (
+        <div className="fixed inset-0 z-50 bg-lab-bg/90 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="bg-lab-panel border border-lab-signal/50 rounded-2xl px-8 py-10 max-w-lg w-full text-center">
+            <div className="text-7xl mb-4" role="img" aria-label="trophy">
+              🏆
+            </div>
+            <h2 className="text-3xl font-bold text-lab-signal mb-2">
+              Congrats, you won!
+            </h2>
+            <p className="text-sm text-lab-dim mb-6">
+              You cracked the classroom code with a prompt ClassBot could
+              legitimately answer.
+            </p>
+            {win.secret && (
+              <>
+                <p className="mono text-[10px] uppercase tracking-wide text-lab-dim mb-2">
+                  The secret code is
+                </p>
+                <p className="mono text-4xl sm:text-5xl font-bold break-words mb-6">
+                  {win.secret}
+                </p>
+              </>
+            )}
+            <p className="text-lab-signal text-sm mb-6">
+              +{win.bonusXp} bonus XP · total {xp} XP
+            </p>
+            <button
+              onClick={() => setWin(null)}
+              className="bg-lab-signal text-lab-bg font-semibold rounded-lg px-6 py-2.5 hover:opacity-90 transition"
+            >
+              Keep practising
+            </button>
+          </div>
+        </div>
+      )}
+
       <header className="border-b border-lab-line px-6 py-4 flex items-center justify-between">
         <div>
           <h1 className="font-semibold">🤖 ClassBot</h1>
