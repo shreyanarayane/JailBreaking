@@ -46,10 +46,16 @@ const FORMAT_PATTERNS = [
   /\busing (bullet points|headings|numbered steps)\b/i,
 ];
 
+const TONE_WORDS =
+  "friendly|formal|casual|professional|encouraging|supportive|enthusiastic|simple|beginner[- ]friendly|concise|playful|humorous|patient|warm|serious";
+
 const TONE_PATTERNS = [
-  /\b(friendly|formal|casual|professional|encouraging|simple|beginner[- ]friendly|concise|playful) tone\b/i,
-  /\bin a (friendly|formal|casual|professional|simple|playful) (way|manner|tone)\b/i,
-  /\bkeep it (simple|short|friendly|professional)\b/i,
+  new RegExp(`\\b(${TONE_WORDS})([ ,]+(and[ ]+)?(${TONE_WORDS}))*[ ]+(tone|voice|style)\\b`, "i"),
+  // "keep the tone playful and encouraging", "use a friendly voice"
+  new RegExp(`\\b(tone|voice|style)\\b.{0,20}\\b(${TONE_WORDS})\\b`, "i"),
+  new RegExp(`\\bin a[n]? .{0,30}(${TONE_WORDS}).{0,20}\\b(way|manner|tone|voice|style)\\b`, "i"),
+  new RegExp(`\\b(sound|be|stay|remain)[ ]+(${TONE_WORDS})\\b`, "i"),
+  new RegExp(`\\bkeep (it|things|your (answer|reply|response))[ ]+(${TONE_WORDS}|short)\\b`, "i"),
 ];
 
 function matchesAny(patterns: RegExp[], text: string): boolean {
@@ -115,6 +121,21 @@ export function scoreAttempt(craft: CraftResult): number {
   return score;
 }
 
+// The teachable part of a failed attempt is *why* the technique fails, not
+// that it failed. Keyed by the machine-readable technique label.
+const TECHNIQUE_EXPLANATIONS: Record<string, string> = {
+  instruction_override:
+    "Telling a model to ignore its instructions rarely works: the system prompt is sent as a higher-priority instruction than anything you type, so the model treats your override as just another user request.",
+  role_impersonation:
+    "Claiming to be the teacher or an admin doesn't work because the model has no way to verify who you are — your claim is only text, and the system prompt outranks it.",
+  hypothetical_framing:
+    "Fictional framing (\"imagine a story where...\") sometimes works on real systems because the model separates 'talking about' from 'doing'. Here it fails because the secret is guarded by an explicit rule that applies regardless of framing.",
+  encoding_trick:
+    "Asking for the answer in base64 or reversed is an obfuscation attack: it hides the output from simple filters. It fails here because the rule is enforced by the model's own reasoning, not by a keyword filter on the output.",
+  direct_demand:
+    "A bare demand gives the model nothing it can say yes to. Structure is what earns a response — give it a role and a legitimate task instead of pressure.",
+};
+
 export function buildFeedback(
   craft: CraftResult,
   jailbreak: JailbreakDetection
@@ -124,12 +145,15 @@ export function buildFeedback(
   );
 
   if (jailbreak.detected) {
+    const why = jailbreak.technique
+      ? TECHNIQUE_EXPLANATIONS[jailbreak.technique]
+      : undefined;
     return (
-      `Nice attempt! You are testing "${jailbreak.label}". ` +
-      `ClassBot won't reveal the classroom secret this way, but let's look at your prompt's structure. ` +
+      `You just used "${jailbreak.label}". ` +
+      (why ? `${why} ` : "") +
       (missing.length
-        ? `You're still missing: ${missing.join(", ")}.`
-        : `You actually hit all five CRAFT components — the technique just isn't how ClassBot is designed to respond.`)
+        ? `Your prompt is also missing: ${missing.join(", ")} — completing CRAFT is what actually earns clues from ClassBot.`
+        : `Your prompt does cover all five CRAFT components, which is what earns clues here — reward comes from structure, not from pressure.`)
     );
   }
 

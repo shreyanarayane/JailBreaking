@@ -1,6 +1,45 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import {
+  GenerateContentResult,
+  GenerationConfig,
+  GoogleGenerativeAI,
+} from "@google/generative-ai";
 
 export class GeminiKeyInvalidError extends Error {}
+
+// The 2.5 models reason before answering and charge those hidden thinking
+// tokens against maxOutputTokens, which can consume the whole budget and
+// return a candidate with no text at all. `thinkingConfig` is not in this
+// SDK version's types, but generationConfig is serialized straight into the
+// v1beta request body, so the field reaches the API.
+type GenerationConfigWithThinking = GenerationConfig & {
+  thinkingConfig?: { thinkingBudget: number };
+};
+
+const NO_THINKING: GenerationConfigWithThinking = {
+  thinkingConfig: { thinkingBudget: 0 },
+};
+
+/**
+ * `result.response.text()` throws when a candidate was cut off before
+ * producing any text (finishReason MAX_TOKENS with empty parts). Treat that
+ * as a failed attempt so the caller falls through to the next model instead
+ * of surfacing a crash or a sentence that stops mid-word.
+ */
+function extractText(result: GenerateContentResult, modelName: string): string | null {
+  const finishReason = result.response?.candidates?.[0]?.finishReason;
+  let text = "";
+  try {
+    text = result.response.text().trim();
+  } catch (err) {
+    console.warn(`[gemini] ${modelName} returned no usable text (finishReason=${finishReason})`, err);
+    return null;
+  }
+  if (!text) {
+    console.warn(`[gemini] ${modelName} returned empty text (finishReason=${finishReason})`);
+    return null;
+  }
+  return text;
+}
 
 export interface KeyValidationResult {
   valid: boolean;
@@ -8,14 +47,18 @@ export interface KeyValidationResult {
   error?: string;
 }
 
-// Fallback list of modern models if dynamic listing is restricted
+// Fallback list if dynamic listing is restricted, cheapest-and-fastest first.
+// Only model names that actually exist on the free tier.
 const FALLBACK_MODELS = [
-  "gemini-3.6-flash",
+  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",
   "gemini-2.5-flash",
-  "gemini-2.5-pro",
-  "gemini-2.0-flash-exp",
   "gemini-1.5-flash",
 ];
+
+// Models that burn output budget on hidden reasoning; deprioritized so a
+// student's turn isn't spent on thinking tokens instead of an answer.
+const THINKING_MODEL = /2\.5-(flash|pro)$/;
 
 /**
  * Dynamically finds the best available model for this student's API key
@@ -31,20 +74,22 @@ async function discoverWorkingModel(apiKey: string): Promise<string> {
       const models: Array<{ name: string; supportedGenerationMethods?: string[] }> =
         data.models || [];
 
-      // Find first flash model that supports generateContent
-      const flashModel = models.find(
+      const usable = models.filter(
         (m) =>
-          m.name.includes("flash") &&
-          m.supportedGenerationMethods?.includes("generateContent")
+          m.supportedGenerationMethods?.includes("generateContent") &&
+          !m.name.includes("-thinking")
       );
+
+      // Prefer a flash model that answers without a hidden reasoning pass.
+      const flashModel =
+        usable.find(
+          (m) => m.name.includes("flash") && !THINKING_MODEL.test(m.name)
+        ) ?? usable.find((m) => m.name.includes("flash"));
       if (flashModel) {
         return flashModel.name.replace("models/", "");
       }
 
-      // Or any model supporting generateContent
-      const anyModel = models.find((m) =>
-        m.supportedGenerationMethods?.includes("generateContent")
-      );
+      const anyModel = usable[0];
       if (anyModel) {
         return anyModel.name.replace("models/", "");
       }
@@ -81,7 +126,7 @@ export async function validateGeminiKey(rawApiKey: string): Promise<KeyValidatio
       const model = genAI.getGenerativeModel({ model: modelName });
       const result = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: "ping" }] }],
-        generationConfig: { maxOutputTokens: 5 },
+        generationConfig: { ...NO_THINKING, maxOutputTokens: 5 },
       });
 
       if (result.response) {
@@ -181,9 +226,12 @@ export async function callClassBot(
       });
       const result = await model.generateContent({
         contents: [{ role: "user", parts: [{ text: studentPrompt }] }],
-        generationConfig: { maxOutputTokens: 1024 },
+        generationConfig: { ...NO_THINKING, maxOutputTokens: 1024 },
       });
-      return result.response.text();
+      const text = extractText(result, modelName);
+      if (text) {
+        return text;
+      }
     } catch (err: any) {
       if (err?.status === 401 || err?.status === 400 || err?.message?.includes("API_KEY_INVALID")) {
         throw new GeminiKeyInvalidError("Stored Gemini API key was rejected.");
