@@ -3,9 +3,17 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { getTeacherFromRequest } from "@/lib/auth";
 import crypto from "crypto";
 
+// Short and easy to read aloud / off a projector, e.g. "SEC1-A1". Ambiguous
+// characters (I, O, 0) are left out so students don't mistype them.
+const CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const CODE_DIGITS = "123456789";
+
+function pick(alphabet: string): string {
+  return alphabet[crypto.randomInt(alphabet.length)];
+}
+
 function generateClassCode(prefix: string): string {
-  const randomSuffix = crypto.randomBytes(2).toString("hex").toUpperCase();
-  return `${prefix}-${randomSuffix}`;
+  return `${prefix}-${pick(CODE_LETTERS)}${pick(CODE_DIGITS)}`;
 }
 
 export async function GET(req: NextRequest) {

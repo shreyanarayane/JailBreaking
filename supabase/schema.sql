@@ -17,7 +17,7 @@ create table classes (
   id            uuid primary key default gen_random_uuid(),
   teacher_id    uuid not null references teachers(id) on delete cascade,
   class_name    text not null,
-  class_code    text unique not null,          -- e.g. "7XK4P", shown to students to join
+  class_code    text unique not null,          -- e.g. "SEC1-A1", shown to students to join
   secret_code   text not null default 'CRAFT-2026',
   max_attempts  int not null default 10,
   active        boolean not null default true,

@@ -66,7 +66,7 @@ export default function JoinPage() {
         <input
           value={classCode}
           onChange={(e) => setClassCode(e.target.value.toUpperCase())}
-          placeholder="7XK4P"
+          placeholder="SEC1-A1"
           className="mono w-full bg-lab-bg border border-lab-line rounded-lg px-3 py-2 mb-4 tracking-widest uppercase focus:outline-none focus:border-lab-signal"
           maxLength={8}
           required
