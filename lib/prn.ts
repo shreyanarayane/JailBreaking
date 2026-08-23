@@ -1,8 +1,8 @@
 // The class roster is a contiguous block of PRNs, so membership is a range
 // check rather than a list. Shared by the join form and the join API — the
 // API check is the authoritative one.
-export const PRN_MIN = 202621001;
-export const PRN_MAX = 202621495;
+export const PRN_MIN = 262921001;
+export const PRN_MAX = 262921495;
 
 export interface PrnCheck {
   valid: boolean;
